@@ -33,6 +33,7 @@ module ActiveShipping
     ENDPOINT = "https://soa-gw.canadapost.ca/"    # production
 
     SHIPMENT_MIMETYPE = "application/vnd.cpc.ncshipment+xml"
+    CONTRACT_MIMETYPE = "application/vnd.cpc.shipment-v8+xml"
     RATE_MIMETYPE = "application/vnd.cpc.ship.rate+xml"
     TRACK_MIMETYPE = "application/vnd.cpc.track+xml"
     REGISTER_MIMETYPE = "application/vnd.cpc.registration+xml"
@@ -101,6 +102,16 @@ module ActiveShipping
       request_body = build_shipment_request(origin, destination, package, line_items, options)
       response = ssl_post(create_shipment_url(options), request_body, headers(options, SHIPMENT_MIMETYPE, SHIPMENT_MIMETYPE))
       parse_shipment_response(response)
+    rescue ActiveUtils::ResponseError, ActiveShipping::ResponseError => e
+      error_response(e.response.body, CPPWSShippingResponse)
+    rescue MissingCustomerNumberError
+      CPPWSShippingResponse.new(false, "Missing Customer Number", {}, :carrier => @@name)
+    end
+
+    def create_contract_shipment(origin, destination, package, line_items = [], options = {}, return_details = {})
+      request_body = build_contract_shipment_request(origin, destination, package, line_items, options, return_details)
+      response = ssl_post(create_contract_shipment_url(options), request_body, headers(options, CONTRACT_MIMETYPE, CONTRACT_MIMETYPE))
+      parse_contract_shipment_response(response)
     rescue ActiveUtils::ResponseError, ActiveShipping::ResponseError => e
       error_response(e.response.body, CPPWSShippingResponse)
     rescue MissingCustomerNumberError
@@ -358,6 +369,7 @@ module ActiveShipping
     # :show_postage_rate
     # :cod, :cod_amount, :insurance, :insurance_amount, :signature_required, :pa18, :pa19, :hfp, :dns, :lad
     #
+    # 
     def build_shipment_request(origin, destination, package, line_items = [], options = {})
       builder = Nokogiri::XML::Builder.new do |xml|
         xml.public_send('non-contract-shipment', :xmlns => "http://www.canadapost.ca/ws/ncshipment") do
@@ -378,8 +390,46 @@ module ActiveShipping
       builder.to_xml
     end
 
+    # return_details
+    # :service_code, :return_recipient {:name, :company, :address_details {:address_line_1...}}
+
+    def build_contract_shipment_request(origin, destination, package, line_items = [], options = {}, return_details = {})
+      builder = Nokogiri::XML::Builder.new do |xml|
+        xml.public_send('shipment', :xmlns => "http://www.canadapost.ca/ws/shipment-v8") do
+          shipment_node(xml, options)
+          xml.public_send('delivery-spec') do
+            shipment_service_code_node(xml, options)
+            shipment_sender_node(xml, origin, options)
+            shipment_destination_node(xml, destination, options)
+            shipment_options_node(xml, options)
+            shipment_parcel_node(xml, package)
+            shipment_notification_node(xml, options)
+            shipment_preferences_node(xml, options)
+            references_node(xml, options)             # optional > user defined custom notes
+            shipment_customs_node(xml, destination, line_items, options)
+            settlement_node(xml, options)
+            # COD Remittance defaults to sender
+          end
+          shipment_return_node(xml, return_details, options)
+        end
+      end
+      builder.to_xml
+    end
+
+    def shipment_node(xml, options)
+      xml.public_send('transmit-shipment', options[:transmit] || true)
+      xml.public_send('requested-shipping-point', options[:shipping_point])
+    end
+
     def shipment_service_code_node(xml, options)
       xml.public_send('service-code', options[:service])
+    end
+
+    def settlement_node(xml, options)
+      xml.public_send('settlement-info') do 
+        xml.public_send('contract-id', options[:contract_number])
+        xml.public_send('intended-method-of-payment', options[:payment_type] || 'Account' )
+      end
     end
 
     def shipment_sender_node(xml, sender, options)
@@ -393,7 +443,7 @@ module ActiveShipping
           xml.public_send('address-line-2', location.address2_and_3) unless location.address2_and_3.blank?
           xml.public_send('city', location.city)
           xml.public_send('prov-state', location.province)
-          # xml.public_send('country-code', location.country_code)
+          xml.public_send('country-code', location.country_code) unless location.country_code.blank?
           xml.public_send('postal-zip-code', get_sanitized_postal_code(location))
         end
       end
@@ -473,6 +523,28 @@ module ActiveShipping
       end
     end
 
+    # return_details
+    # :service_code, :return_recipient {:name, :company, :address_details {:address_line_1...}}
+
+    def shipment_return_node(xml, return_details, options)
+      return if return_details.blank?
+      location = location_from_hash(return_details[:return_recipient][:address_details])
+      xml.public_send('return-spec') do
+        xml.public_send('service-code', return_details[:service_code] )
+        xml.public_send('return-recipient') do 
+          xml.public_send('name', return_details[:name]) if return_details[:name]
+          xml.public_send('company', return_details[:company]) if return_details[:company]
+          xml.public_send('address-details') do
+            xml.public_send('address-line-1', location.address1)
+            xml.public_send('address-line-2', location.address2_and_3) unless location.address2_and_3.blank?
+            xml.public_send('city', location.city)
+            xml.public_send('prov-state', location.province) unless location.province.blank?
+            xml.public_send('postal-zip-code', get_sanitized_postal_code(location))
+          end
+        end 
+      end
+    end
+
     def shipment_parcel_node(xml, package, options = {})
       weight = sanitize_weight_kg(package.kilograms.to_f)
       xml.public_send('parcel-characteristics') do
@@ -484,7 +556,7 @@ module ActiveShipping
             xml.public_send('width', '%.1f' % ((pkg_dim[1] * 10).round / 10.0)) if pkg_dim.size >= 2
             xml.public_send('height', '%.1f' % ((pkg_dim[0] * 10).round / 10.0)) if pkg_dim.size >= 1
           end
-          xml.public_send('document', false)
+          #xml.public_send('document', false)
         else
           xml.public_send('document', true)
         end
@@ -492,6 +564,23 @@ module ActiveShipping
         xml.public_send('mailing-tube', package.tube?)
         xml.public_send('unpackaged', package.unpackaged?)
       end
+    end
+
+    def parse_contract_shipment_response(response)
+      doc = Nokogiri.XML(response)
+      doc.remove_namespaces!
+      raise ActiveShipping::ResponseError, "No Shipping" unless doc.at('shipment-info')
+      receipt_url = doc.root.at_xpath("links/link[@rel='receipt']")['href'] unless doc.root.at_xpath("links/link[@rel='receipt']").blank?
+      return_label_url = doc.root.at_xpath("links/link[@rel='returnLabel']")['href'] unless doc.root.at_xpath("links/link[@rel='returnLabel']").blank?
+      options = {
+        :shipping_id      => doc.root.at('shipment-id').text,
+        :details_url      => doc.root.at_xpath("links/link[@rel='details']")['href'],
+        :label_url        => doc.root.at_xpath("links/link[@rel='label']")['href'],
+        :receipt_url      => receipt_url,
+        :return_label_url => return_label_url
+      }
+      options[:tracking_number] = doc.root.at('tracking-pin').text if doc.root.at('tracking-pin')
+      CPPWSContractShippingResponse.new(true, "", {}, options)
     end
 
     def parse_shipment_response(response)
@@ -505,7 +594,6 @@ module ActiveShipping
         :receipt_url      => doc.root.at_xpath("links/link[@rel='receipt']")['href'],
       }
       options[:tracking_number] = doc.root.at('tracking-pin').text if doc.root.at('tracking-pin')
-
       CPPWSShippingResponse.new(true, "", {}, options)
     end
 
@@ -601,6 +689,15 @@ module ActiveShipping
         endpoint + "rs/#{customer_number}-#{@platform_id}/ncshipment"
       else
         endpoint + "rs/#{customer_number}/ncshipment"
+      end
+    end
+
+    def create_contract_shipment_url(options)
+      raise MissingCustomerNumberError unless customer_number = options[:customer_number]
+      if @platform_id.present?
+        endpoint + "rs/#{customer_number}-#{@platform_id}/shipment"
+      else
+        endpoint + "rs/#{customer_number}/#{customer_number}/shipment"
       end
     end
 
@@ -870,6 +967,19 @@ module ActiveShipping
       @label_url      = options[:label_url]
       @details_url    = options[:details_url]
       @receipt_url    = options[:receipt_url]
+    end
+  end
+
+  class CPPWSContractShippingResponse < ShippingResponse
+    include CPPWSErrorResponse
+    attr_reader :label_url, :details_url, :receipt_url, :return_label_url
+    def initialize(success, message, params = {}, options = {})
+      handle_error(message, options)
+      super
+      @label_url      = options[:label_url]
+      @details_url    = options[:details_url]
+      @receipt_url    = options[:receipt_url]
+      @return_label_url    = options[:return_label_url]
     end
   end
 

@@ -2,6 +2,8 @@ require 'test_helper'
 
 class RemoteCanadaPostPWSTest < ActiveSupport::TestCase
   # All remote tests require Canada Post development environment credentials
+  # When using an account with a contract number you should add it to the opts hash
+
   include ActiveShipping::Test::Credentials
   include ActiveShipping::Test::Fixtures
 
@@ -14,9 +16,22 @@ class RemoteCanadaPostPWSTest < ActiveSupport::TestCase
 
     @line_item1 = line_item_fixture
 
-    @shipping_opts1 = { :dc => true, :cov => true, :cov_amount => 100.00, :aban => true }
+    @shipping_opts1 = {:cod => true, :dc => true, :cov => true, :cov_amount => 100.00, :aban => true }
+
+    @shipping_opts2 = {so: true, cov: true, cov_amount: 999.99, transmit: true, shipping_point: 'R3W1S1'}
 
     @home_params = {
+      :name        => "John Smith",
+      :company     => "test",
+      :phone       => "613-555-1212",
+      :address1    => "123 Elm St.",
+      :city        => 'Ottawa',
+      :province    => 'ON',
+      :postal_code => 'K1P 1J1'
+    }
+    @home = Location.new(@home_params)
+
+    @contract_home_params = {
       :name        => "John Smith",
       :company     => "test",
       :phone       => "613-555-1212",
@@ -26,7 +41,7 @@ class RemoteCanadaPostPWSTest < ActiveSupport::TestCase
       :country     => 'CA',
       :postal_code => 'K1P 1J1'
     }
-    @home = Location.new(@home_params)
+    @contract_home = Location.new(@contract_home_params)
 
     @dom_params = {
       :name        => "John Smith Sr.",
@@ -77,6 +92,7 @@ class RemoteCanadaPostPWSTest < ActiveSupport::TestCase
     @cp.logger = Logger.new(StringIO.new)
 
     @customer_number = @login[:customer_number]
+    @contract_number = @login[:contract_number]
 
     @DEFAULT_RESPONSE = {
       :shipping_id => "406951321983787352",
@@ -121,25 +137,51 @@ class RemoteCanadaPostPWSTest < ActiveSupport::TestCase
   end
 
   def test_create_shipment
-    skip "Failing with 'Contract Number is a required field' after API change, skipping because no clue how to fix, might need different creds"
+    skip "contract number in credentials" if @contract_number
     opts = {:customer_number => @customer_number, :service => "DOM.XP"}
     response = @cp.create_shipment(@home_params, @dom_params, @pkg1, @line_item1, opts)
     assert_kind_of CPPWSShippingResponse, response
-    assert_match /\A\d{17}\z/, response.shipping_id
+    assert_match /\A\d{18}\z/, response.shipping_id
     assert_equal "123456789012", response.tracking_number
-    assert_match "https://ct.soa-gw.canadapost.ca/ers/artifact/", response.label_url
+    assert_match "https://ct.soa-gw.canadapost.ca/rs/artifact/", response.label_url
     assert_match @login[:api_key], response.label_url
   end
 
   def test_create_shipment_with_options
-    skip "Failing with 'Contract Number is a required field' after API change, skipping because no clue how to fix, might need different creds"
+    skip "contract number in credentials" if @contract_number
     opts = {:customer_number => @customer_number, :service => "USA.EP"}.merge(@shipping_opts1)
     response = @cp.create_shipment(@home_params, @dest_params, @pkg1, @line_item1, opts)
-
     assert_kind_of CPPWSShippingResponse, response
-    assert_match /\A\d{17}\z/, response.shipping_id
+    assert_match /\A\d{18}\z/, response.shipping_id
     assert_equal "123456789012", response.tracking_number
-    assert_match "https://ct.soa-gw.canadapost.ca/ers/artifact/", response.label_url
+    assert_match "https://ct.soa-gw.canadapost.ca/rs/artifact/", response.label_url
+    assert_match @login[:api_key], response.label_url
+  end
+
+  def test_create_contract_shipment_with_options
+    skip "no contract number in credentials" unless @contract_number
+    opts = {:customer_number => @customer_number, :service => "DOM.XP", contract_number: @contract_number}.merge(@shipping_opts2)
+    response = @cp.create_contract_shipment(@contract_home_params, @dom_params, @pkg1, @line_item1, opts)
+    assert_kind_of CPPWSContractShippingResponse, response
+    assert_match /\A\d{18}\z/, response.shipping_id
+    assert_equal "123456789012", response.tracking_number
+    assert_match "https://ct.soa-gw.canadapost.ca/rs/artifact/", response.label_url
+    assert_match @login[:api_key], response.label_url
+  end
+
+  def test_create_contract_shipment_with_return_label_and_options
+    skip "no contract number in credentials" unless @contract_number
+
+    opts = {:customer_number => @customer_number, :service => "DOM.XP", contract_number: @contract_number}.merge(@shipping_opts2)
+
+    return_details = {service_code: 'DOM.RP', return_recipient: { address_details: @contract_home_params } }
+
+    response = @cp.create_contract_shipment(@contract_home_params, @dom_params, @pkg1, @line_item1, opts, return_details)
+    assert_kind_of CPPWSContractShippingResponse, response
+    assert_match /\A\d{18}\z/, response.shipping_id
+    assert_equal "123456789012", response.tracking_number
+    assert_match "https://ct.soa-gw.canadapost.ca/rs/artifact/", response.label_url
+    assert_match "https://ct.soa-gw.canadapost.ca/rs/artifact/", response.return_label_url
     assert_match @login[:api_key], response.label_url
   end
 
