@@ -63,6 +63,7 @@ class CanadaPostPwsShippingTest < ActiveSupport::TestCase
                        :so => true, :pa18 => true}
 
     @default_options = {:customer_number => '123456'}
+    @default_contract_options = {:customer_number => '123456', :contract_number => '42708517'}
 
     @DEFAULT_RESPONSE = {
       :shipping_id => "406951321983787352",
@@ -91,6 +92,30 @@ class CanadaPostPwsShippingTest < ActiveSupport::TestCase
     options = @default_options.dup
     request = @cp.build_shipment_request(@home_params, @dom_params, @pkg1, @line_item1, options)
     refute request.blank?
+  end
+
+  def test_build_contract_shipment_request_for_domestic
+    options = @default_contract_options.dup
+    request = @cp.build_contract_shipment_request(@home_params, @dom_params, @pkg1, @line_item1, options)
+    refute request.blank?
+  end
+
+  def test_build_contract_shipment_with_return_request_for_domestic
+    options = @default_contract_options.dup
+    return_details = {service_code: 'DOM.RP', return_recipient: { address_details: @home_params } }
+
+    request = @cp.build_contract_shipment_request(@home_params, @dom_params, @pkg1, @line_item1, options, return_details)
+    refute request.blank?
+
+    doc = Nokogiri.XML(request)
+    doc.remove_namespaces!
+
+    assert root_node = doc.at('shipment')
+    assert delivery_spec = root_node.at('delivery-spec')
+    assert destination = delivery_spec.at('destination')
+    assert address_details = destination.at('address-details')
+    assert_equal 'CA', address_details.at('country-code').text
+    assert return_spec = root_node.at('return-spec')
   end
 
   def test_build_shipment_request_for_US
