@@ -586,7 +586,7 @@ module ActiveShipping
       }
       options[:tracking_number] = doc.root.at('tracking-pin').text if doc.root.at('tracking-pin')
       options[:return_tracking_number] = doc.root.at('return-tracking-pin').text if doc.root.at('return-tracking-pin')
-      puts "OPTIONS: #{options}"
+
       CPPWSContractShippingResponse.new(true, "", {}, options)
     end
 
@@ -980,6 +980,7 @@ module ActiveShipping
   class CPPWSContractShippingResponse < ShippingResponse
     include CPPWSErrorResponse
     attr_reader :label_url, :details_url, :receipt_url, :return_label_url, :return_tracking_number
+
     def initialize(success, message, params = {}, options = {})
       handle_error(message, options)
       super
