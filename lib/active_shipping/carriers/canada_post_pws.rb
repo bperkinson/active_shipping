@@ -71,7 +71,7 @@ module ActiveShipping
         :province    => 'ON',
         :city        => 'Ottawa',
         :address1    => '61A York St',
-        :postal_code => 'K1N5T2'
+        :postal_code => 'K1N5T3'
       }
     end
 
