@@ -71,7 +71,7 @@ module ActiveShipping
         :province    => 'ON',
         :city        => 'Ottawa',
         :address1    => '61A York St',
-        :postal_code => 'K1N5T2'
+        :postal_code => 'K1N5T3'
       }
     end
 
@@ -131,6 +131,11 @@ module ActiveShipping
     def retrieve_shipping_label(shipping_response, options = {})
       raise MissingShippingNumberError unless shipping_response && shipping_response.shipping_id
       ssl_get(shipping_response.label_url, headers(options, "application/pdf"))
+    end
+
+    def retrieve_return_label(shipping_response, options = {})
+      raise MissingShippingNumberError unless shipping_response && shipping_response.shipping_id
+      ssl_get(shipping_response.return_label_url, headers(options, "application/pdf"))
     end
 
     def register_merchant(options = {})
@@ -580,6 +585,8 @@ module ActiveShipping
         :return_label_url => return_label_url
       }
       options[:tracking_number] = doc.root.at('tracking-pin').text if doc.root.at('tracking-pin')
+      options[:return_tracking_number] = doc.root.at('return-tracking-pin').text if doc.root.at('return-tracking-pin')
+
       CPPWSContractShippingResponse.new(true, "", {}, options)
     end
 
@@ -972,7 +979,8 @@ module ActiveShipping
 
   class CPPWSContractShippingResponse < ShippingResponse
     include CPPWSErrorResponse
-    attr_reader :label_url, :details_url, :receipt_url, :return_label_url
+    attr_reader :label_url, :details_url, :receipt_url, :return_label_url, :return_tracking_number
+
     def initialize(success, message, params = {}, options = {})
       handle_error(message, options)
       super
@@ -980,6 +988,7 @@ module ActiveShipping
       @details_url    = options[:details_url]
       @receipt_url    = options[:receipt_url]
       @return_label_url    = options[:return_label_url]
+      @return_tracking_number    = options[:return_tracking_number]
     end
   end
 
