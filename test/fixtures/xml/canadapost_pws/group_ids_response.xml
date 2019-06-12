@@ -1,0 +1,6 @@
+<groups>
+    <group>
+        <link rel="group" href="https://XX/rs/111111111/222222222/shipment?groupid=123456" media-type="application/vnd.cpc.shipment-v8+xml"></link>
+        <group-id>123456</group-id>
+    </group>
+</groups>

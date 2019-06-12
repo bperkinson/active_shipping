@@ -280,4 +280,19 @@ class CanadaPostPwsShippingTest < ActiveSupport::TestCase
   def test_maximum_address_field_length
     assert_equal 44, @cp.maximum_address_field_length
   end
+
+  def test_manifest_group_ids
+    options = @default_options.dup
+    xml_response = xml_fixture('canadapost_pws/group_ids_response')
+    @cp.expects(:ssl_get).once.returns(xml_response)
+    response = @cp.list_group_ids(options)
+    assert_equal @cp.parse_group_ids_response(xml_response).group_ids, response.group_ids
+  end
+
+  def test_transmit_shipments
+    options = @default_options.dup
+    xml_response = xml_fixture('canadapost_pws/transmit_response')
+    response = @cp.transmit_shipments(Location.new(@home_params), options)
+    assert response.nil?
+  end
 end

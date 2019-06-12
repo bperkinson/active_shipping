@@ -1,0 +1,7 @@
+<manifest>
+    <po-number>D906367941</po-number>
+    <links>
+        <link rel="self" href="https://XX/rs/111111111/222222222/manifest/33333333" media-type="application/vnd.cpc.manifest-v8+xml"></link>
+        <link rel="details" href="https://XX/rs/111111111/222222222/manifest/666666666/details" media-type="application/vnd.cpc.manifest-v8+xml"></link>
+    </links>
+</manifest>

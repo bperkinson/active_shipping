@@ -1,0 +1,20 @@
+<transmit-set xmlns="http://www.canadapost.ca/ws/manifest-v8">
+    <group-ids>
+        <group-id>1234</group-id>
+    </group-ids>
+    <requested-shipping-point>K1K4T3</requested-shipping-point>
+    <cpc-pickup-indicator>true</cpc-pickup-indicator>
+    <detailed-manifests>true</detailed-manifests>
+    <method-of-payment>Account</method-of-payment>
+    <manifest-address>
+        <manifest-company>my company</manifest-company>
+        <manifest-name>MajorShop</manifest-name>
+        <phone-number>555 555 5555</phone-number>
+        <address-details>
+            <address-line-1>1230 Tako RD.</address-line-1>
+            <city>Ottawa</city>
+            <prov-state>ON</prov-state>
+            <postal-zip-code>K1A1A1</postal-zip-code>
+        </address-details>
+    </manifest-address>
+</transmit-set>

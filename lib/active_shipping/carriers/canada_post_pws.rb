@@ -37,6 +37,8 @@ module ActiveShipping
     RATE_MIMETYPE = "application/vnd.cpc.ship.rate+xml"
     TRACK_MIMETYPE = "application/vnd.cpc.track+xml"
     REGISTER_MIMETYPE = "application/vnd.cpc.registration+xml"
+    MANIFEST_MIMETYPE = "application/vnd.cpc.manifest-v8+xml"
+
 
     LANGUAGE = {
       'en' => 'en-CA',
@@ -73,6 +75,31 @@ module ActiveShipping
         :address1    => '61A York St',
         :postal_code => 'K1N5T3'
       }
+    end
+
+    def list_group_ids(options ={})
+      url = endpoint + "rs/#{@customer_number}/#{@customer_number}/group"
+      response = ssl_get(url, headers(options, CONTRACT_MIMETYPE))
+      parse_group_ids_response(response)
+    rescue ActiveUtils::ResponseError, ActiveShipping::ResponseError => e
+      error_response(e.response.body, CPPWSGroupResponse)
+    end
+
+    def transmit_shipments(warehouse_location, options = {})
+      url = endpoint + "rs/#{@customer_number}/#{@customer_number}/manifest"
+      request  = build_transmit_request(warehouse_location, options)
+      response = ssl_post(url, request, headers(options, MANIFEST_MIMETYPE, MANIFEST_MIMETYPE))
+      parse_transmit_response(response)
+    rescue ActiveUtils::ResponseError, ActiveShipping::ResponseError => e
+      error_response(e.response.body, CPPWSTransmitResponse) if e.response
+    end
+
+    def find_manifest(manifest_url, options = {})
+      url = manifest_url
+      response = ssl_get(url, headers(options, MANIFEST_MIMETYPE))
+      parse_manifest_response(response)
+    rescue ActiveUtils::ResponseError, ActiveShipping::ResponseError => e
+      error_response(e.response.body, CPPWSManifestResponse)
     end
 
     def find_rates(origin, destination, line_items = [], options = {}, package = nil, services = [])
@@ -137,6 +164,12 @@ module ActiveShipping
       raise MissingShippingNumberError unless shipping_response && shipping_response.shipping_id
       ssl_get(shipping_response.return_label_url, headers(options, "application/pdf"))
     end
+
+    def retrieve_manifest_document(transmit_response, options = {})
+      raise MissingTransmitError unless transmit_response
+      ssl_get(transmit_response, headers(options, "application/pdf"))
+    end
+
 
     def register_merchant(options = {})
       url = endpoint + "ot/token"
@@ -310,6 +343,46 @@ module ActiveShipping
       CPPWSRateResponse.new(true, "", {}, :rates => rates)
     end
 
+    def parse_group_ids_response(response)
+      doc = Nokogiri.XML(response)
+      doc.remove_namespaces!
+      raise ActiveShipping::ResponseError, "No Group ID's" unless doc.at('groups')
+      group_ids = []
+      group_ids = doc.root.xpath('group').map do |node|
+        link  = node.at("link")['href']
+        group_id  = node.at("group-id").text
+        group_ids << {link: link, group_id: group_id}
+      end
+      CPPWSGroupResponse.new(true, "", {}, :group_ids => group_ids)
+    end
+
+    def parse_transmit_response(response)
+      doc = Nokogiri.XML(response)
+      doc.remove_namespaces!
+      raise ActiveShipping::ResponseError, "No manifests" unless doc.at('manifests')
+      manifests = []
+      manifests = doc.xpath('manifests').map do |node|
+        link  = node.at("link")['href']
+      end
+      CPPWSTransmitResponse.new(true, "", {}, :manifests => manifests)
+    end
+
+    def parse_manifest_response(response)
+      doc = Nokogiri.XML(response)
+      doc.remove_namespaces!
+      raise ActiveShipping::ResponseError, "No manifests" unless doc.at('manifest')
+      
+      po_number = doc.at("manifest/po-number").text
+      manifest_url = doc.at_xpath("manifest/links/link[@rel='self']")['href']
+      artifact_url = doc.at_xpath("manifest/links/link[@rel='artifact']")['href']
+      details_url = doc.at_xpath("manifest/links/link[@rel='details']")['href']
+      manifest_shipments_url = doc.at_xpath("manifest/links/link[@rel='manifestShipments']")['href']
+      manifest = CPPWSManifest.new(po_number, manifest_url, artifact_url, details_url, manifest_shipments_url)
+      
+      
+      CPPWSManifestResponse.new(true, "", {}, :manifest => manifest)
+    end
+
     def price_from_node(node, exclude_tax)
       price = node.at('price-details/due').text
       return price unless exclude_tax
@@ -421,8 +494,80 @@ module ActiveShipping
       builder.to_xml
     end
 
+    def build_transmit_request(warehouse_location, options = {})
+      builder = Nokogiri::XML::Builder.new do |xml|
+        xml.public_send('transmit-set', :xmlns => "http://www.canadapost.ca/ws/manifest-v8") do
+          group_node(xml, options)
+          unless options[:shipping_point].nil?
+            options[:postal_simple] = warehouse_location.postal_simple
+            options[:pickup_indicator] = true
+            requested_shipping_point_node(xml, options)
+            cpc_pickup_indicator_node(xml, options)
+          else
+            shipping_point_node(xml, options)
+          end
+          method_of_payment_node(xml, options)
+          manifest_address_node(warehouse_location, xml, options)
+          detailed_manifests_node(xml, options)
+        end
+      end
+      builder.to_xml
+    end
+
+    def detailed_manifests_node(xml, options)
+      xml.public_send('detailed-manifests', options[:detailed_manifest] || false)
+    end
+
+    def manifest_address_node(warehouse_location, xml, options)
+      xml.public_send('manifest-address') do
+          xml.public_send('manifest-company' , warehouse_location.company)
+          xml.public_send('phone-number' , warehouse_location.phone)
+          xml.public_send('address-details') do
+            xml.public_send('address-line-1', warehouse_location.address1)
+            xml.public_send('address-line-2', warehouse_location.address2) unless warehouse_location.address2.blank?
+            xml.public_send('city', warehouse_location.city)
+            xml.public_send('prov-state', warehouse_location.province)
+            xml.public_send('country-code', warehouse_location.country_code)
+            # pc_strip = warehouse_location.postal_code.sub(/[^a-zA-Z0-9]/,'')
+            xml.public_send('postal-zip-code', warehouse_location.postal_simple)
+          end
+      end
+    end
+
+    def method_of_payment_node(xml, options)
+      #CreditCard Account SupplierAccount 
+      #default to account
+      pay_method = options[:payment_method] || "Account"
+      xml.public_send('method-of-payment', pay_method)
+    end
+
+    def requested_shipping_point_node(xml, options)
+      xml.public_send('requested-shipping-point', options[:postal_simple])
+    end
+
+    def cpc_pickup_indicator_node(xml, options)
+      xml.public_send('cpc-pickup-indicator', options[:pickup_indicator])
+    end
+
+    def shipping_point_node(xml, options)
+      xml.public_send('shipping-point-id', options[:shipping_point_id])
+    end
+
+    def group_node(xml, options)
+      raise ActiveShipping::ResponseError, "No Group ID's defined in options" unless options[:group_ids].is_a?(Array)
+      xml.public_send('group-ids') do
+        options[:group_ids].each do |grp|
+          xml.public_send('group-id' , grp)
+        end
+      end
+    end
+
     def shipment_node(xml, options)
-      xml.public_send('transmit-shipment', options[:transmit] || true)
+      if !!options[:transmit]
+        xml.public_send('transmit-shipment', options[:transmit] || true)
+      else
+        xml.public_send('group-id', options[:group_id])
+      end
       xml.public_send('requested-shipping-point', options[:shipping_point])
     end
 
@@ -934,6 +1079,32 @@ module ActiveShipping
     end
   end
 
+  class CPPWSGroupResponse < Response
+    DELIVERED_EVENT_CODES = %w(404 AA003)
+    include CPPWSErrorResponse
+
+    attr_reader :group_ids
+
+    def initialize(success, message, params = {}, options = {})
+      handle_error(message, options)
+      super
+      @group_ids      = options[:group_ids]
+    end
+  end
+
+  class CPPWSManifestResponse < Response
+    DELIVERED_EVENT_CODES = %w(7313 7317 9118 9119 9122 9186 9187 9188 9189)
+    include CPPWSErrorResponse
+
+    attr_reader :manifest
+
+    def initialize(success, message, params = {}, options = {})
+      handle_error(message, options)
+      super
+      @manifest     = options[:manifest]
+    end
+  end
+
   class CPPWSTrackingResponse < TrackingResponse
     DELIVERED_EVENT_CODES = %w(1408 1409 1410 1411 1412 1413 1414 1415 1416 1417 1418 1419 1420 1421 1422 1423 1424 1425 1426 1427 1428 1429 1430 1431 1432 1433 1434 1435 1436 1437 1438 1441 1442 1496 1497 1498 1499 5300)
     include CPPWSErrorResponse
@@ -974,6 +1145,29 @@ module ActiveShipping
       @label_url      = options[:label_url]
       @details_url    = options[:details_url]
       @receipt_url    = options[:receipt_url]
+    end
+  end
+
+  class CPPWSTransmitResponse < Response
+    include CPPWSErrorResponse
+    attr_reader :manifest_urls
+    def initialize(success, message, params = {}, options = {})
+      handle_error(message, options)
+      super
+      @manifest_urls      = options[:manifests]
+
+    end
+  end
+
+  class CPPWSManifest < Response
+    attr_reader :po_number, :manifest_url, :artifact_url, :details_url, :manifest_shipments_url
+
+    def initialize(po_number, manifest_url, artifact_url, details_url, manifest_shipments_url)
+      @po_number = po_number
+      @manifest_url      = manifest_url
+      @artifact_url    = artifact_url
+      @details_url    = details_url
+      @manifest_shipments_url    = manifest_shipments_url
     end
   end
 
@@ -1024,4 +1218,5 @@ module ActiveShipping
   class MissingCustomerNumberError < StandardError; end
   class MissingShippingNumberError < StandardError; end
   class MissingTokenIdError < StandardError; end
+  class MissingTransmitError < StandardError; end
 end

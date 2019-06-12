@@ -135,6 +135,10 @@ module ActiveShipping #:nodoc:
       prettyprint.gsub(/\n/, ' ')
     end
 
+    def postal_simple
+      @postal_code.sub(/[^a-zA-Z0-9]/,'')
+    end
+
     def prettyprint
       chunks = [@name, @address1, @address2, @address3]
       chunks << [@city, @province, @postal_code].reject(&:blank?).join(', ')
